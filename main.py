@@ -5,7 +5,7 @@ import pandas as pd
 from backtesting import Backtest, Strategy
 from backtesting.lib import crossover
 
-# 1. FETCH HISTORICAL 15M BTC DATA (GitHub Cloud Compatible)
+# 1. FETCH HISTORICAL 15M BTC DATA
 def fetch_binance_15m(symbol="BTCUSDT", days=180):
     endpoints = [
         "https://api.binance.us/api/v3/klines",
@@ -64,7 +64,24 @@ def fetch_binance_15m(symbol="BTCUSDT", days=180):
 
 data = fetch_binance_15m("BTCUSDT", days=180)
 
-# 2. DEFINE THE RSI + MA STRATEGY
+# Helper functions for backtesting.py indicator registration
+def compute_rsi(prices, period=14):
+    close = pd.Series(prices)
+    delta = close.diff()
+    gain = delta.where(delta > 0, 0.0)
+    loss = -delta.where(delta < 0, 0.0)
+    avg_gain = gain.ewm(alpha=1/period, min_periods=period).mean()
+    avg_loss = loss.ewm(alpha=1/period, min_periods=period).mean()
+    rs = avg_gain / avg_loss
+    rsi = 100.0 - (100.0 / (1.0 + rs))
+    return rsi.fillna(50.0).values
+
+def compute_sma(array, period=14):
+    series = pd.Series(array)
+    return series.rolling(window=period).mean().fillna(50.0).values
+
+
+# 2. DEFINE STRATEGY
 class RsiMaStrategy(Strategy):
     rsi_period = 14
     rsi_ma_period = 14
@@ -72,40 +89,21 @@ class RsiMaStrategy(Strategy):
     stop_loss_pct = 0.0185  # 1.85% Stop Loss
 
     def init(self):
-        close = pd.Series(self.data.Close)
-        delta = close.diff()
-
-        # Wilder's Exponential Smoothing
-        gain = delta.where(delta > 0, 0.0)
-        loss = -delta.where(delta < 0, 0.0)
-        
-        avg_gain = gain.ewm(alpha=1/self.rsi_period, min_periods=self.rsi_period).mean()
-        avg_loss = loss.ewm(alpha=1/self.rsi_period, min_periods=self.rsi_period).mean()
-
-        rs = avg_gain / avg_loss
-        rsi_series = 100.0 - (100.0 / (1.0 + rs))
-        rsi_series = rsi_series.fillna(50.0)
-
-        # RSI Moving Average
-        rsi_ma_series = rsi_series.rolling(window=self.rsi_ma_period).mean().fillna(50.0)
-
-        # Pass as core strategy indicators
-        self.rsi = self.I(lambda: rsi_series.values, name="RSI")
-        self.rsi_ma = self.I(lambda: rsi_ma_series.values, name="RSI_MA")
+        # Register indicators cleanly with self.I
+        self.rsi = self.I(compute_rsi, self.data.Close, self.rsi_period)
+        self.rsi_ma = self.I(compute_sma, self.rsi, self.rsi_ma_period)
 
     def next(self):
-        current_rsi = self.rsi[-1]
-
+        # BUY CONDITION: RSI crosses above its MA while RSI < 45
         if not self.position:
-            # BUY: RSI crosses above its MA while RSI is in low zone (< 45)
-            if crossover(self.rsi, self.rsi_ma) and current_rsi < 45.0:
+            if crossover(self.rsi, self.rsi_ma) and self.rsi[-1] < 45.0:
                 entry_price = self.data.Close[-1]
                 sl_price = entry_price * (1.0 - self.stop_loss_pct)
                 self.buy(sl=sl_price)
                 
+        # SELL CONDITION: Close trade when RSI reaches or exceeds 65
         else:
-            # SELL: Exit trade when RSI reaches or exceeds 65
-            if current_rsi >= self.take_profit_rsi:
+            if self.rsi[-1] >= self.take_profit_rsi:
                 self.position.close()
 
 # 3. RUN BACKTEST
