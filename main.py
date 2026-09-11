@@ -8,6 +8,8 @@ from backtesting.lib import crossover
 # 1. FETCH HISTORICAL 15M BTC DATA FROM BINANCE (180 Days)
 def fetch_binance_15m(symbol="BTCUSDT", days=180):
     url = "https://api.binance.com/api/v3/klines"
+    headers = {"User-Agent": "Mozilla/5.0"}  # Prevents GitHub Actions IP blocks
+    
     end_time = int(pd.Timestamp.now().timestamp() * 1000)
     start_time = int((pd.Timestamp.now() - pd.Timedelta(days=days)).timestamp() * 1000)
     
@@ -20,11 +22,16 @@ def fetch_binance_15m(symbol="BTCUSDT", days=180):
             "endTime": end_time,
             "limit": 1000
         }
-        res = requests.get(url, params=params).json()
+        res = requests.get(url, params=params, headers=headers).json()
+        
         if not res or not isinstance(res, list):
             break
+            
         all_candles.extend(res)
-        start_time = res[-1][0] + 1
+        start_time = res[-1][0] + 1  # Increment past last fetched candle
+
+    if not all_candles:
+        raise ValueError("Failed to retrieve candle data from Binance API.")
 
     df = pd.DataFrame(all_candles, columns=[
         "Open time", "Open", "High", "Low", "Close", "Volume",
@@ -68,7 +75,7 @@ class RsiMaStrategy(Strategy):
         # Simple Moving Average of the RSI line
         rsi_ma_series = rsi_series.rolling(window=self.rsi_ma_period).mean().fillna(50.0)
 
-        # Convert to raw NumPy arrays for backtesting engine
+        # Convert to NumPy arrays for backtesting engine
         rsi_arr = rsi_series.to_numpy()
         rsi_ma_arr = rsi_ma_series.to_numpy()
 
