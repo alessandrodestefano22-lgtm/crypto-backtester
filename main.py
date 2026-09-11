@@ -1,92 +1,74 @@
-import os
-import pandas as pd
-import ta
-import yfinance as yf
 from backtesting import Backtest, Strategy
 from backtesting.lib import crossover
+import yfinance as yf
+import pandas as pd
+import ta
 
-# =========================================================
-# 1. DEFINE TRADING STRATEGY
-# =========================================================
-class SmaCrossover(Strategy):
-    # Default Moving Average periods (can be optimized later)
-    fast_period = 10
-    slow_period = 50
+# 1. FETCH 15-MINUTE BTC DATA (Last 60 days limit for 15m interval on yfinance)
+data = yf.download(tickers="BTC-USD", period="60d", interval="15m")
 
-    def init(self):
-        """Pre-calculates technical indicators before running the strategy."""
-        close = pd.Series(self.data.Close)
-        
-        # Calculate Fast Moving Average
-        self.fast_sma = self.I(
-            lambda x: ta.trend.sma_indicator(close, window=self.fast_period), 
-            self.data.Close
-        )
-        # Calculate Slow Moving Average
-        self.slow_sma = self.I(
-            lambda x: ta.trend.sma_indicator(close, window=self.slow_period), 
-            self.data.Close
-        )
-
-    def next(self):
-        """Runs bar-by-bar through historical data to evaluate buy/sell logic."""
-        # BUY SIGNAL: Fast SMA crosses ABOVE Slow SMA
-        if crossover(self.fast_sma, self.slow_sma):
-            self.position.close()                          # Close active short positions
-            self.buy(sl=self.data.Close[-1] * 0.95)        # Open Long with a 5% Stop-Loss
-
-        # SELL SIGNAL: Fast SMA crosses BELOW Slow SMA
-        elif crossover(self.slow_sma, self.fast_sma):
-            self.position.close()                          # Close active long positions
-            self.sell(sl=self.data.Close[-1] * 1.05)       # Open Short with a 5% Stop-Loss
-
-# =========================================================
-# 2. DOWNLOAD HISTORICAL PRICE DATA
-# =========================================================
-print("Downloading market data...")
-symbol = "BTC-USD"
-data = yf.download(symbol, start="2022-01-01", interval="1d")
-
-# Clean Yahoo Finance multi-index formatting to fit backtesting requirements
+# Clean multi-index columns if returned by yfinance
 if isinstance(data.columns, pd.MultiIndex):
     data.columns = data.columns.get_level_values(0)
-data = data[['Open', 'High', 'Low', 'Close', 'Volume']].dropna()
 
-# =========================================================
-# 3. CONFIGURE AND RUN BACKTEST
-# =========================================================
+# 2. DEFINE THE RSI + MA STRATEGY
+class RsiMaStrategy(Strategy):
+    rsi_period = 14
+    rsi_ma_period = 14
+    oversold_threshold = 30
+    take_profit_rsi = 65
+    stop_loss_pct = 0.0185  # 1.85% Stop Loss
+
+    def init(self):
+        # Calculate RSI 14
+        rsi_series = ta.momentum.rsi(self.data.Close.s, window=self.rsi_period)
+        self.rsi = self.I(lambda: rsi_series, name="RSI")
+        
+        # Calculate Moving Average of the RSI line
+        rsi_ma_series = ta.trend.sma_indicator(pd.Series(self.rsi), window=self.rsi_ma_period)
+        self.rsi_ma = self.I(lambda: rsi_ma_series, name="RSI_MA")
+        
+        # Track whether RSI recently dipped into oversold territory
+        self.was_oversold = False
+
+    def next(self):
+        # Track if RSI dropped below 30
+        if self.rsi[-1] < self.oversold_threshold:
+            self.was_oversold = True
+
+        # Check if we are currently in a trade
+        if not self.position:
+            # BUY CONDITION: Was oversold AND RSI crosses ABOVE its MA
+            if self.was_oversold and crossover(self.rsi, self.rsi_ma):
+                entry_price = self.data.Close[-1]
+                sl_price = entry_price * (1 - self.stop_loss_pct)
+                
+                # Execute buy order with 1.85% fixed stop loss
+                self.buy(sl=sl_price)
+                self.was_oversold = False  # Reset oversold flag
+                
+        else:
+            # SELL CONDITION: Take profit when RSI reaches 65
+            if self.rsi[-1] >= self.take_profit_rsi:
+                self.position.close()
+
+# 3. RUN BACKTEST
 bt = Backtest(
     data, 
-    SmaCrossover, 
-    cash=10000,          # Starting account balance ($10,000)
-    commission=0.001,    # 0.1% transaction fee per trade (simulates broker fees)
-    exclusive_orders=True
+    RsiMaStrategy, 
+    cash=10000, 
+    commission=0.001,  # 0.1% spot fee
+    exclusive_orders=True  # Guarantees only 1 open trade at a time
 )
 
-# Run standard backtest
 stats = bt.run()
 
-# Run automated parameter optimization (finds best Moving Average settings)
-stats_opt = bt.optimize(
-    fast_period=range(5, 30, 5),      # Test fast SMA from 5 to 30
-    slow_period=range(30, 100, 10),    # Test slow SMA from 30 to 100
-    maximize='Sharpe Ratio',          # Optimize for risk-adjusted returns
-    constraint=lambda p: p.fast_period < p.slow_period
-)
+# 4. OUTPUT RESULTS
+print("\n" + "="*40)
+print("   RSI 15M STRATEGY METRICS")
+print("="*40 + "\n")
+print(stats)
 
-# =========================================================
-# 4. SAVE RESULTS TO A FILE
-# =========================================================
-os.makedirs("results", exist_ok=True)
-
-report_path = "results/backtest_report.txt"
-with open(report_path, "w") as f:
-    f.write("=========================================\n")
-    f.write(f" BACKTEST RESULTS FOR {symbol}\n")
-    f.write("=========================================\n\n")
-    f.write("--- BASE STRATEGY METRICS ---\n")
+# Save output to text file for artifact generation
+with open("backtest_report.txt", "w") as f:
     f.write(str(stats))
-    f.write("\n\n--- OPTIMIZED STRATEGY METRICS ---\n")
-    f.write(str(stats_opt))
-
-print(f"Backtest completed successfully. Results saved to {report_path}")
