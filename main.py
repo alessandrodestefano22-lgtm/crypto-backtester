@@ -24,7 +24,7 @@ def fetch_binance_15m(symbol="BTCUSDT", days=180):
         if not res or not isinstance(res, list):
             break
         all_candles.extend(res)
-        start_time = res[-1][0] + 1  # Move past last fetched candle timestamp
+        start_time = res[-1][0] + 1
 
     df = pd.DataFrame(all_candles, columns=[
         "Open time", "Open", "High", "Low", "Close", "Volume",
@@ -34,8 +34,11 @@ def fetch_binance_15m(symbol="BTCUSDT", days=180):
     
     df["Open time"] = pd.to_datetime(df["Open time"], unit="ms")
     df.set_index("Open time", inplace=True)
-    numeric_cols = ["Open", "High", "Low", "Close", "Volume"]
-    df[numeric_cols] = df[numeric_cols].apply(pd.to_numeric, axis=1)
+    
+    for col in ["Open", "High", "Low", "Close", "Volume"]:
+        df[col] = pd.to_numeric(df[col], errors="coerce")
+        
+    df.dropna(inplace=True)
     return df[["Open", "High", "Low", "Close", "Volume"]]
 
 data = fetch_binance_15m("BTCUSDT", days=180)
@@ -51,7 +54,7 @@ class RsiMaStrategy(Strategy):
         close = pd.Series(self.data.Close)
         delta = close.diff()
 
-        # Wilder's Smoothing for Standard RSI calculation
+        # Wilder's Exponential Smoothing for Standard RSI
         gain = delta.where(delta > 0, 0.0)
         loss = -delta.where(delta < 0, 0.0)
         
@@ -65,21 +68,23 @@ class RsiMaStrategy(Strategy):
         # Simple Moving Average of the RSI line
         rsi_ma_series = rsi_series.rolling(window=self.rsi_ma_period).mean().fillna(50.0)
 
-        # Register indicators with backtesting engine
-        self.rsi = self.I(lambda: rsi_series.to_numpy(), name="RSI")
-        self.rsi_ma = self.I(lambda: rsi_ma_series.to_numpy(), name="RSI_MA")
+        # Convert to raw NumPy arrays for backtesting engine
+        rsi_arr = rsi_series.to_numpy()
+        rsi_ma_arr = rsi_ma_series.to_numpy()
+
+        self.rsi = self.I(lambda: rsi_arr, name="RSI")
+        self.rsi_ma = self.I(lambda: rsi_ma_arr, name="RSI_MA")
 
     def next(self):
-        # Check if currently in a trade
         if not self.position:
-            # BUY CONDITION: RSI crosses ABOVE RSI_MA while RSI is low (< 45)
+            # BUY: RSI crosses above its Moving Average while RSI < 45
             if crossover(self.rsi, self.rsi_ma) and self.rsi[-1] < 45.0:
                 entry_price = self.data.Close[-1]
                 sl_price = entry_price * (1.0 - self.stop_loss_pct)
                 self.buy(sl=sl_price)
                 
         else:
-            # SELL CONDITION: Take profit when RSI reaches or exceeds 65
+            # SELL: Close trade when RSI reaches or exceeds 65
             if self.rsi[-1] >= self.take_profit_rsi:
                 self.position.close()
 
@@ -88,7 +93,7 @@ bt = Backtest(
     data, 
     RsiMaStrategy, 
     cash=10000, 
-    commission=0.001,  # 0.1% Binance spot trading fee
+    commission=0.001,
     exclusive_orders=True
 )
 
