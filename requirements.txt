@@ -1,0 +1,4 @@
+backtesting
+yfinance
+pandas
+ta
