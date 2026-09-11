@@ -7,7 +7,6 @@ from backtesting.lib import crossover
 
 # 1. FETCH HISTORICAL 15M BTC DATA (GitHub Cloud Compatible)
 def fetch_binance_15m(symbol="BTCUSDT", days=180):
-    # Use binance.us or public api endpoints that accept cloud runner IPs
     endpoints = [
         "https://api.binance.us/api/v3/klines",
         "https://api.binance.com/api/v3/klines"
@@ -41,10 +40,8 @@ def fetch_binance_15m(symbol="BTCUSDT", days=180):
                 curr_start = data[-1][0] + 1
             
             if len(all_candles) > 0:
-                print(f"Successfully fetched {len(all_candles)} candles from {url}")
                 break
-        except Exception as e:
-            print(f"Endpoint {url} failed: {e}")
+        except Exception:
             continue
 
     if not all_candles:
@@ -78,7 +75,7 @@ class RsiMaStrategy(Strategy):
         close = pd.Series(self.data.Close)
         delta = close.diff()
 
-        # Wilder's Exponential Smoothing for Standard RSI
+        # Wilder's Exponential Smoothing
         gain = delta.where(delta > 0, 0.0)
         loss = -delta.where(delta < 0, 0.0)
         
@@ -89,27 +86,26 @@ class RsiMaStrategy(Strategy):
         rsi_series = 100.0 - (100.0 / (1.0 + rs))
         rsi_series = rsi_series.fillna(50.0)
 
-        # Simple Moving Average of the RSI line
+        # RSI Moving Average
         rsi_ma_series = rsi_series.rolling(window=self.rsi_ma_period).mean().fillna(50.0)
 
-        # Convert to NumPy arrays for backtesting engine
-        rsi_arr = rsi_series.to_numpy()
-        rsi_ma_arr = rsi_ma_series.to_numpy()
-
-        self.rsi = self.I(lambda: rsi_arr, name="RSI")
-        self.rsi_ma = self.I(lambda: rsi_ma_arr, name="RSI_MA")
+        # Pass as core strategy indicators
+        self.rsi = self.I(lambda: rsi_series.values, name="RSI")
+        self.rsi_ma = self.I(lambda: rsi_ma_series.values, name="RSI_MA")
 
     def next(self):
+        current_rsi = self.rsi[-1]
+
         if not self.position:
-            # BUY: RSI crosses above its Moving Average while RSI < 45
-            if crossover(self.rsi, self.rsi_ma) and self.rsi[-1] < 45.0:
+            # BUY: RSI crosses above its MA while RSI is in low zone (< 45)
+            if crossover(self.rsi, self.rsi_ma) and current_rsi < 45.0:
                 entry_price = self.data.Close[-1]
                 sl_price = entry_price * (1.0 - self.stop_loss_pct)
                 self.buy(sl=sl_price)
                 
         else:
-            # SELL: Close trade when RSI reaches or exceeds 65
-            if self.rsi[-1] >= self.take_profit_rsi:
+            # SELL: Exit trade when RSI reaches or exceeds 65
+            if current_rsi >= self.take_profit_rsi:
                 self.position.close()
 
 # 3. RUN BACKTEST
