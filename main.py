@@ -68,6 +68,14 @@ print("\n" + "="*40)
 print("   RSI 15M STRATEGY METRICS")
 print("="*40 + "\n")
 print(stats)
+import os
+
+# Create the results directory if it doesn't exist
+os.makedirs("results", exist_ok=True)
+
+# Save output to results/backtest_report.txt
+with open("results/backtest_report.txt", "w") as f:
+    f.write(str(stats))
 
 # Save output to text file for artifact generation
 with open("backtest_report.txt", "w") as f:
