@@ -1,4 +1,4 @@
 backtesting
-yfinance
 pandas
-ta
+numpy
+requests
