@@ -5,33 +5,50 @@ import pandas as pd
 from backtesting import Backtest, Strategy
 from backtesting.lib import crossover
 
-# 1. FETCH HISTORICAL 15M BTC DATA FROM BINANCE (180 Days)
+# 1. FETCH HISTORICAL 15M BTC DATA (GitHub Cloud Compatible)
 def fetch_binance_15m(symbol="BTCUSDT", days=180):
-    url = "https://api.binance.com/api/v3/klines"
-    headers = {"User-Agent": "Mozilla/5.0"}  # Prevents GitHub Actions IP blocks
+    # Use binance.us or public api endpoints that accept cloud runner IPs
+    endpoints = [
+        "https://api.binance.us/api/v3/klines",
+        "https://api.binance.com/api/v3/klines"
+    ]
     
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
     end_time = int(pd.Timestamp.now().timestamp() * 1000)
     start_time = int((pd.Timestamp.now() - pd.Timedelta(days=days)).timestamp() * 1000)
     
     all_candles = []
-    while start_time < end_time:
-        params = {
-            "symbol": symbol,
-            "interval": "15m",
-            "startTime": start_time,
-            "endTime": end_time,
-            "limit": 1000
-        }
-        res = requests.get(url, params=params, headers=headers).json()
-        
-        if not res or not isinstance(res, list):
-            break
+    
+    for url in endpoints:
+        curr_start = start_time
+        all_candles = []
+        try:
+            while curr_start < end_time:
+                params = {
+                    "symbol": symbol,
+                    "interval": "15m",
+                    "startTime": curr_start,
+                    "endTime": end_time,
+                    "limit": 1000
+                }
+                res = requests.get(url, params=params, headers=headers, timeout=10)
+                if res.status_code != 200:
+                    break
+                data = res.json()
+                if not data or not isinstance(data, list):
+                    break
+                all_candles.extend(data)
+                curr_start = data[-1][0] + 1
             
-        all_candles.extend(res)
-        start_time = res[-1][0] + 1  # Increment past last fetched candle
+            if len(all_candles) > 0:
+                print(f"Successfully fetched {len(all_candles)} candles from {url}")
+                break
+        except Exception as e:
+            print(f"Endpoint {url} failed: {e}")
+            continue
 
     if not all_candles:
-        raise ValueError("Failed to retrieve candle data from Binance API.")
+        raise ValueError("Failed to retrieve candle data across all API endpoints.")
 
     df = pd.DataFrame(all_candles, columns=[
         "Open time", "Open", "High", "Low", "Close", "Volume",
