@@ -1,3 +1,4 @@
+import os
 from backtesting import Backtest, Strategy
 from backtesting.lib import crossover
 import yfinance as yf
@@ -64,15 +65,12 @@ bt = Backtest(
 stats = bt.run()
 
 # 4. OUTPUT RESULTS
-import os
-
-# 4. OUTPUT RESULTS
 print("\n" + "="*40)
 print("   RSI 15M STRATEGY METRICS")
 print("="*40 + "\n")
 print(stats)
 
-# Create the results directory if it doesn't exist
+# Create the results directory expected by GitHub Actions
 os.makedirs("results", exist_ok=True)
 
 # Save output to text file for artifact generation
